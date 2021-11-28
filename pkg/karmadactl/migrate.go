@@ -1,6 +1,7 @@
 package karmadactl
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -8,7 +9,18 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+
+	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
+	"github.com/karmada-io/karmada/pkg/generated/clientset/versioned"
+	karmadaclientset "github.com/karmada-io/karmada/pkg/generated/clientset/versioned"
 	"github.com/karmada-io/karmada/pkg/karmadactl/options"
+	"github.com/karmada-io/karmada/pkg/util/restmapper"
 )
 
 var (
@@ -142,7 +154,140 @@ func RunMigrate(_ io.Writer, karmadaConfig KarmadaConfig, opts CommandMigrateOpt
 		return fmt.Errorf("failed to get legacy cluster config. error: %v", err)
 	}
 
-	_, _ = controlPlaneRestConfig, clusterConfig
+	return migrate(controlPlaneRestConfig, clusterConfig, opts)
+}
 
+func migrate(controlPlaneRestConfig, memberConfig *rest.Config, opts CommandMigrateOption) error {
+	memberClient := dynamic.NewForConfigOrDie(memberConfig)
+	gvk := schema.GroupVersionKind{
+		Group:   opts.group,
+		Version: opts.version,
+		Kind:    opts.kind,
+	}
+	mapper, err := apiutil.NewDynamicRESTMapper(memberConfig)
+	if err != nil {
+		return fmt.Errorf("Failed to create restmapper: %v", err)
+	}
+	gvr, err := restmapper.GetGroupVersionResource(mapper, gvk)
+	if err != nil {
+		return fmt.Errorf("Failed to get gvr from %q: %v", gvk, err)
+	}
+	obj, err := memberClient.Resource(gvr).Namespace(opts.Namespace).Get(context.TODO(), opts.name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("Failed to get resource %q(%s/%s) in %s: %v", gvr, opts.Namespace, opts.name, opts.Cluster, err)
+	}
+	controlplaneDynamicClient := dynamic.NewForConfigOrDie(controlPlaneRestConfig)
+	_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Get(context.TODO(), opts.name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
+			if err != nil {
+				return fmt.Errorf("Failed to create resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
+			}
+			karmadaClient := karmadaclientset.NewForConfigOrDie(controlPlaneRestConfig)
+			if len(opts.Namespace) == 0 {
+				return createOrUpdateClusterPropagationPolicy(karmadaClient, gvr, opts)
+			}
+			return createOrUpdatePropagationPolicy(karmadaClient, gvr, opts)
+		}
+		return fmt.Errorf("Failed to get resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
+	}
+	// TODO: adopt resource when it already exists in control plane
+	return nil
+}
+
+func createOrUpdatePropagationPolicy(karmadaClient *versioned.Clientset, gvr schema.GroupVersionResource, opts CommandMigrateOption) error {
+	name := opts.name + "-propagation"
+	ns := opts.Namespace
+	pp, err := karmadaClient.PolicyV1alpha1().PropagationPolicies(ns).Get(context.TODO(), name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			pp = &policyv1alpha1.PropagationPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: ns,
+				},
+				Spec: policyv1alpha1.PropagationSpec{
+					ResourceSelectors: []policyv1alpha1.ResourceSelector{
+						{
+							APIVersion: gvr.GroupVersion().String(),
+							Kind:       opts.kind,
+							Name:       opts.name,
+						},
+					},
+					Placement: policyv1alpha1.Placement{
+						ClusterAffinity: &policyv1alpha1.ClusterAffinity{
+							ClusterNames: []string{opts.Cluster},
+						},
+					},
+				},
+			}
+			_, err = karmadaClient.PolicyV1alpha1().PropagationPolicies(ns).Create(context.TODO(), pp, metav1.CreateOptions{})
+			return err
+		}
+		return fmt.Errorf("Failed to get propagation policy(%s/%s) in control plane: %v", ns, name, err)
+	}
+	// edit propagation policy if it already exists
+	// TODO: make it compatible with label selector and field selector!!!
+	targetClusters := pp.Spec.Placement.ClusterAffinity.ClusterNames
+	// append the cluster to ClusterAffinity.ClusterNames if not exists
+	exists := false
+	for _, cluster := range targetClusters {
+		if cluster == opts.Cluster {
+			exists = true
+		}
+	}
+	if !exists {
+		targetClusters = append(targetClusters, opts.Cluster)
+		_, err = karmadaClient.PolicyV1alpha1().PropagationPolicies(ns).Update(context.TODO(), pp, metav1.UpdateOptions{})
+		return err
+	}
+	return nil
+}
+
+func createOrUpdateClusterPropagationPolicy(karmadaClient *versioned.Clientset, gvr schema.GroupVersionResource, opts CommandMigrateOption) error {
+	name := opts.name + "-propagation"
+	cpp, err := karmadaClient.PolicyV1alpha1().ClusterPropagationPolicies().Get(context.TODO(), name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			cpp = &policyv1alpha1.ClusterPropagationPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: name,
+				},
+				Spec: policyv1alpha1.PropagationSpec{
+					ResourceSelectors: []policyv1alpha1.ResourceSelector{
+						{
+							APIVersion: gvr.GroupVersion().String(),
+							Kind:       opts.kind,
+							Name:       opts.name,
+						},
+					},
+					Placement: policyv1alpha1.Placement{
+						ClusterAffinity: &policyv1alpha1.ClusterAffinity{
+							ClusterNames: []string{opts.Cluster},
+						},
+					},
+				},
+			}
+			_, err = karmadaClient.PolicyV1alpha1().ClusterPropagationPolicies().Create(context.TODO(), cpp, metav1.CreateOptions{})
+			return err
+		}
+		return fmt.Errorf("Failed to get cluster propagation policy(%s) in control plane: %v", name, err)
+	}
+	// edit propagation policy if it already exists
+	// TODO: make it compatible with label selector and field selector!!!
+	targetClusters := cpp.Spec.Placement.ClusterAffinity.ClusterNames
+	// append the cluster to ClusterAffinity.ClusterNames if not exists
+	exists := false
+	for _, cluster := range targetClusters {
+		if cluster == opts.Cluster {
+			exists = true
+		}
+	}
+	if !exists {
+		targetClusters = append(targetClusters, opts.Cluster)
+		_, err = karmadaClient.PolicyV1alpha1().ClusterPropagationPolicies().Update(context.TODO(), cpp, metav1.UpdateOptions{})
+		return err
+	}
 	return nil
 }

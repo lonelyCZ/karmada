@@ -15,7 +15,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	configv1alpha1 "github.com/karmada-io/karmada/pkg/apis/config/v1alpha1"
-	workv1alpha1 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha1"
 	"github.com/karmada-io/karmada/pkg/resourceinterpreter"
 	"github.com/karmada-io/karmada/pkg/util"
 	"github.com/karmada-io/karmada/pkg/util/restmapper"
@@ -77,18 +76,13 @@ func (o *objectWatcherImpl) Create(clusterName string, desireObj *unstructured.U
 		// The 'IsAlreadyExists' conflict may happen in following known scenarios:
 		// - 1. In a reconcile process, the execution controller successfully applied resource to member cluster but failed to update the work conditions(Applied=True),
 		//   when reconcile again, the controller will try to apply(by create) the resource again.
-		// - 2. The resource already exist in the member cluster but it's not created by karmada.
+		// - 2. The resource already exist in the member cluster but it's not created by karmada,
+		//   in which case karmada will adopt the resource
 		if apierrors.IsAlreadyExists(err) {
 			existObj, err := dynamicClusterClient.DynamicClientSet.Resource(gvr).Namespace(desireObj.GetNamespace()).Get(context.TODO(), desireObj.GetName(), metav1.GetOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to get exist resource(kind=%s, %s/%s) in cluster %v: %v", desireObj.GetKind(), desireObj.GetNamespace(), desireObj.GetName(), clusterName, err)
 			}
-
-			// Avoid updating resources that not managed by karmada.
-			if util.GetLabelValue(desireObj.GetLabels(), workv1alpha1.WorkNameLabel) != util.GetLabelValue(existObj.GetLabels(), workv1alpha1.WorkNameLabel) {
-				return fmt.Errorf("resource(kind=%s, %s/%s) already exist in cluster %v but not managed by karamda", desireObj.GetKind(), desireObj.GetNamespace(), desireObj.GetName(), clusterName)
-			}
-
 			return o.Update(clusterName, desireObj, existObj)
 		}
 		klog.Errorf("Failed to create resource(kind=%s, %s/%s) in cluster %s, err is %v ", desireObj.GetKind(), desireObj.GetNamespace(), desireObj.GetName(), clusterName, err)
@@ -102,6 +96,8 @@ func (o *objectWatcherImpl) Create(clusterName string, desireObj *unstructured.U
 }
 
 func (o *objectWatcherImpl) retainClusterFields(desired, observed *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	desired.SetCreationTimestamp(observed.GetCreationTimestamp())
+	desired.SetGeneration(observed.GetGeneration())
 	// Pass the same ResourceVersion as in the cluster object for update operation, otherwise operation will fail.
 	desired.SetResourceVersion(observed.GetResourceVersion())
 
