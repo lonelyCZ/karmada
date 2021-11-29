@@ -180,6 +180,7 @@ func migrate(controlPlaneRestConfig, memberConfig *rest.Config, opts CommandMigr
 	_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Get(context.TODO(), opts.name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			obj.SetResourceVersion("")
 			_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("Failed to create resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
@@ -238,7 +239,7 @@ func createOrUpdatePropagationPolicy(karmadaClient *versioned.Clientset, gvr sch
 		}
 	}
 	if !exists {
-		targetClusters = append(targetClusters, opts.Cluster)
+		_ = append(targetClusters, opts.Cluster)
 		_, err = karmadaClient.PolicyV1alpha1().PropagationPolicies(ns).Update(context.TODO(), pp, metav1.UpdateOptions{})
 		return err
 	}
@@ -285,7 +286,7 @@ func createOrUpdateClusterPropagationPolicy(karmadaClient *versioned.Clientset, 
 		}
 	}
 	if !exists {
-		targetClusters = append(targetClusters, opts.Cluster)
+		_ = append(targetClusters, opts.Cluster)
 		_, err = karmadaClient.PolicyV1alpha1().ClusterPropagationPolicies().Update(context.TODO(), cpp, metav1.UpdateOptions{})
 		return err
 	}
