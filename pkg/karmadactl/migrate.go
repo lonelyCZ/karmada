@@ -11,9 +11,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
@@ -176,15 +178,20 @@ func migrate(controlPlaneRestConfig, memberConfig *rest.Config, opts CommandMigr
 	if err != nil {
 		return fmt.Errorf("Failed to get resource %q(%s/%s) in %s: %v", gvr, opts.Namespace, opts.name, opts.Cluster, err)
 	}
+
 	controlplaneDynamicClient := dynamic.NewForConfigOrDie(controlPlaneRestConfig)
 	_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Get(context.TODO(), opts.name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			obj.SetResourceVersion("")
+			if err := preprocessResource(obj); err != nil {
+				return fmt.Errorf("Failed to preprocess resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
+			}
+
 			_, err = controlplaneDynamicClient.Resource(gvr).Namespace(opts.Namespace).Create(context.TODO(), obj, metav1.CreateOptions{})
 			if err != nil {
 				return fmt.Errorf("Failed to create resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
 			}
+
 			karmadaClient := karmadaclientset.NewForConfigOrDie(controlPlaneRestConfig)
 			if len(opts.Namespace) == 0 {
 				return createOrUpdateClusterPropagationPolicy(karmadaClient, gvr, opts)
@@ -194,6 +201,21 @@ func migrate(controlPlaneRestConfig, memberConfig *rest.Config, opts CommandMigr
 		return fmt.Errorf("Failed to get resource %q(%s/%s) in control plane: %v", gvr, opts.Namespace, opts.name, err)
 	}
 	// TODO: adopt resource when it already exists in control plane
+	return nil
+}
+
+func preprocessResource(obj *unstructured.Unstructured) error {
+	// ignore resource version
+	obj.SetResourceVersion("")
+	_, found, err := unstructured.NestedMap(obj.Object, "status")
+	if err != nil {
+		klog.Errorf("Failed to get status field from %s(%s/%s): %v", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+		return err
+	}
+	if found {
+		// ignore status
+		unstructured.RemoveNestedField(obj.Object, "status")
+	}
 	return nil
 }
 
