@@ -1,6 +1,8 @@
 package spreadconstraint
 
 import (
+	"k8s.io/klog/v2"
+
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	policyv1alpha1 "github.com/karmada-io/karmada/pkg/apis/policy/v1alpha1"
 	workv1alpha2 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha2"
@@ -60,6 +62,7 @@ type ClusterDetailInfo struct {
 	Name              string
 	Score             int64
 	AvailableReplicas int64
+	propagatePriority int64
 
 	Cluster *clusterv1alpha1.Cluster
 }
@@ -72,16 +75,16 @@ func GroupClustersWithScore(
 	calAvailableReplicasFunc func(clusters []*clusterv1alpha1.Cluster, spec *workv1alpha2.ResourceBindingSpec) []workv1alpha2.TargetCluster,
 ) *GroupClustersInfo {
 	if isTopologyIgnored(placement) {
-		return groupClustersIngoreTopology(clustersScore, spec, calAvailableReplicasFunc)
+		return groupClustersIngoreTopology(clustersScore, spec, placement, calAvailableReplicasFunc)
 	}
 
-	return groupClustersBasedTopology(clustersScore, spec, placement.SpreadConstraints, calAvailableReplicasFunc)
+	return groupClustersBasedTopology(clustersScore, spec, placement, calAvailableReplicasFunc)
 }
 
 func groupClustersBasedTopology(
 	clustersScore framework.ClusterScoreList,
 	rbSpec *workv1alpha2.ResourceBindingSpec,
-	spreadConstraints []policyv1alpha1.SpreadConstraint,
+	placement *policyv1alpha1.Placement,
 	calAvailableReplicasFunc func(clusters []*clusterv1alpha1.Cluster, spec *workv1alpha2.ResourceBindingSpec) []workv1alpha2.TargetCluster,
 ) *GroupClustersInfo {
 	groupClustersInfo := &GroupClustersInfo{
@@ -90,10 +93,10 @@ func groupClustersBasedTopology(
 		Zones:     make(map[string]ZoneInfo),
 	}
 	groupClustersInfo.calAvailableReplicasFunc = calAvailableReplicasFunc
-	groupClustersInfo.generateClustersInfo(clustersScore, rbSpec)
-	groupClustersInfo.generateZoneInfo(spreadConstraints)
-	groupClustersInfo.generateRegionInfo(spreadConstraints)
-	groupClustersInfo.generateProviderInfo(spreadConstraints)
+	groupClustersInfo.generateClustersInfo(clustersScore, placement, rbSpec)
+	groupClustersInfo.generateZoneInfo(placement.SpreadConstraints)
+	groupClustersInfo.generateRegionInfo(placement.SpreadConstraints)
+	groupClustersInfo.generateProviderInfo(placement.SpreadConstraints)
 
 	return groupClustersInfo
 }
@@ -101,22 +104,33 @@ func groupClustersBasedTopology(
 func groupClustersIngoreTopology(
 	clustersScore framework.ClusterScoreList,
 	rbSpec *workv1alpha2.ResourceBindingSpec,
+	placement *policyv1alpha1.Placement,
 	calAvailableReplicasFunc func(clusters []*clusterv1alpha1.Cluster, spec *workv1alpha2.ResourceBindingSpec) []workv1alpha2.TargetCluster,
 ) *GroupClustersInfo {
 	groupClustersInfo := &GroupClustersInfo{}
 	groupClustersInfo.calAvailableReplicasFunc = calAvailableReplicasFunc
-	groupClustersInfo.generateClustersInfo(clustersScore, rbSpec)
+	groupClustersInfo.generateClustersInfo(clustersScore, placement, rbSpec)
 
 	return groupClustersInfo
 }
 
-func (info *GroupClustersInfo) generateClustersInfo(clustersScore framework.ClusterScoreList, rbSpec *workv1alpha2.ResourceBindingSpec) {
+func (info *GroupClustersInfo) generateClustersInfo(clustersScore framework.ClusterScoreList, placement *policyv1alpha1.Placement, rbSpec *workv1alpha2.ResourceBindingSpec) {
 	var clusters []*clusterv1alpha1.Cluster
 	for _, clusterScore := range clustersScore {
 		clusterInfo := ClusterDetailInfo{}
 		clusterInfo.Name = clusterScore.Cluster.Name
 		clusterInfo.Score = clusterScore.Score
 		clusterInfo.Cluster = clusterScore.Cluster
+		klog.Info(placement.ClusterAffinity.PropagatePriority)
+		if placement != nil && placement.ClusterAffinity != nil && placement.ClusterAffinity.PropagatePriority != nil {
+			for idx := range placement.ClusterAffinity.PropagatePriority {
+				klog.Info(placement.ClusterAffinity.PropagatePriority[idx].Preference.MatchExpressions[0].Values[0])
+				if placement.ClusterAffinity.PropagatePriority[idx].Preference.MatchExpressions[0].Values[0] == clusterInfo.Name {
+					klog.Info(placement.ClusterAffinity.PropagatePriority[idx].Weight)
+					clusterInfo.propagatePriority = int64(placement.ClusterAffinity.PropagatePriority[idx].Weight)
+				}
+			}
+		}
 		info.Clusters = append(info.Clusters, clusterInfo)
 		clusters = append(clusters, clusterScore.Cluster)
 	}
