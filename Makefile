@@ -19,7 +19,7 @@ TARGETS := karmada-aggregated-apiserver \
 			karmada-search \
 			karmada-operator \
 			karmada-metrics-adapter \
-			karmada-mcs-controller
+			mcs-controller
 
 CTL_TARGETS := karmadactl kubectl-karmada
 
