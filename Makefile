@@ -18,7 +18,8 @@ TARGETS := karmada-aggregated-apiserver \
 			karmada-interpreter-webhook-example \
 			karmada-search \
 			karmada-operator \
-			karmada-metrics-adapter
+			karmada-metrics-adapter \
+			mcs-controller
 
 CTL_TARGETS := karmadactl kubectl-karmada
 
