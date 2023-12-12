@@ -43,7 +43,6 @@ import (
 	workv1alpha1 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha1"
 	controllerscontext "github.com/karmada-io/karmada/pkg/controllers/context"
 	"github.com/karmada-io/karmada/pkg/controllers/multiclusterservice"
-	"github.com/karmada-io/karmada/pkg/karmadactl/util/apiclient"
 	"github.com/karmada-io/karmada/pkg/metrics"
 	"github.com/karmada-io/karmada/pkg/resourceinterpreter"
 	"github.com/karmada-io/karmada/pkg/sharedcli"
@@ -117,7 +116,7 @@ func init() {
 }
 
 func run(ctx context.Context, opts *options.Options) error {
-	controlPlaneRestConfig, err := apiclient.RestConfig(opts.KarmadaContext, opts.KarmadaKubeConfig)
+	controlPlaneRestConfig, err := controllerruntime.GetConfig()
 	if err != nil {
 		return fmt.Errorf("error building kubeconfig of karmada control plane: %w", err)
 	}

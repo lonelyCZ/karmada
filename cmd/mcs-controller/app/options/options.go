@@ -54,14 +54,7 @@ type Options struct {
 	BindAddress string
 	// SecurePort is the port that the the server serves at.
 	// Note: We hope support https in the future once controller-runtime provides the functionality.
-	SecurePort        int
-	KarmadaKubeConfig string
-	// ClusterContext is the name of the cluster context in control plane KUBECONFIG file.
-	// Default value is the current-context.
-	KarmadaContext string
-	ClusterName    string
-	// ClusterNamespace holds the namespace name where the member cluster secrets are stored.
-	ClusterNamespace string
+	SecurePort int
 	// ClusterAPIQPS is the QPS to use while talking with cluster kube-apiserver.
 	ClusterAPIQPS float32
 	// ClusterAPIBurst is the burst to allow while talking with cluster kube-apiserver.
@@ -135,10 +128,6 @@ func (o *Options) AddFlags(fs *pflag.FlagSet, allControllers []string) {
 	fs.DurationVar(&o.LeaderElection.RetryPeriod.Duration, "leader-elect-retry-period", defaultElectionRetryPeriod.Duration, ""+
 		"The duration the clients should wait between attempting acquisition and renewal "+
 		"of a leadership. This is only applicable if leader election is enabled.")
-	fs.StringVar(&o.KarmadaKubeConfig, "karmada-kubeconfig", o.KarmadaKubeConfig, "Path to karmada control plane kubeconfig file.")
-	fs.StringVar(&o.KarmadaContext, "karmada-context", "", "Name of the cluster context in karmada control plane kubeconfig file.")
-	fs.StringVar(&o.ClusterName, "cluster-name", o.ClusterName, "Name of member cluster that the agent serves for.")
-	fs.StringVar(&o.ClusterNamespace, "cluster-namespace", DefaultKarmadaClusterNamespace, "Namespace in the control plane where member cluster secrets are stored.")
 	fs.Float32Var(&o.ClusterAPIQPS, "cluster-api-qps", 40.0, "QPS to use while talking with cluster kube-apiserver. Doesn't cover events and node heartbeat apis which rate limiting is controlled by a different set of flags.")
 	fs.IntVar(&o.ClusterAPIBurst, "cluster-api-burst", 60, "Burst to use while talking with cluster kube-apiserver. Doesn't cover events and node heartbeat apis which rate limiting is controlled by a different set of flags.")
 	fs.Float32Var(&o.KubeAPIQPS, "kube-api-qps", 40.0, "QPS to use while talking with karmada-apiserver. Doesn't cover events and node heartbeat apis which rate limiting is controlled by a different set of flags.")
