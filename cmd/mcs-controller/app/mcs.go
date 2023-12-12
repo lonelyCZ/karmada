@@ -127,7 +127,7 @@ func run(ctx context.Context, opts *options.Options) error {
 		Scheme:                     gclient.NewSchema(),
 		SyncPeriod:                 &opts.ResyncPeriod.Duration,
 		LeaderElection:             opts.LeaderElection.LeaderElect,
-		LeaderElectionID:           opts.LeaderElection.ResourceName,
+		LeaderElectionID:           "mcs-controller",
 		LeaderElectionNamespace:    opts.LeaderElection.ResourceNamespace,
 		LeaderElectionResourceLock: opts.LeaderElection.ResourceLock,
 		LeaseDuration:              &opts.LeaderElection.LeaseDuration.Duration,
