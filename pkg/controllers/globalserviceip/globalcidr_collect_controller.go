@@ -170,6 +170,9 @@ func (c *GlobalCIDRCollectController) collectGlobalCidr(ctx context.Context, clu
 		return nil
 	}
 
+	if len(cluster.Annotations) == 0 {
+		cluster.Annotations = map[string]string{}
+	}
 	cluster.Annotations[ClusterGlobalCIDRAnnotation] = subCluster.Spec.GlobalCIDR[0]
 
 	err = c.Client.Update(ctx, cluster)
