@@ -111,7 +111,7 @@ var controllersDisabledByDefault = sets.New(
 )
 
 func init() {
-	controllers["globalip"] = startGlobalIPController
+	controllers["globalipallocate"] = startGlobalIPAllocateController
 	controllers["multiclusterservice"] = startMCSController
 	controllers["endpointsliceCollect"] = startEndpointSliceCollectController
 	controllers["endpointsliceDispatch"] = startEndpointSliceDispatchController
@@ -273,14 +273,30 @@ func startEndpointSliceDispatchController(ctx controllerscontext.Context) (enabl
 	return true, nil
 }
 
-func startGlobalIPController(ctx controllerscontext.Context) (enable bool, err error) {
-	globalIPController := &globalserviceip.GlobalIPController{
+func startGlobalIPAllocateController(ctx controllerscontext.Context) (enable bool, err error) {
+	globalIPAllocateController := &globalserviceip.GlobalIPAllocateController{
 		Client:          ctx.Mgr.GetClient(),
-		EventRecorder:   ctx.Mgr.GetEventRecorderFor(globalserviceip.GlobalIPControllerName),
+		EventRecorder:   ctx.Mgr.GetEventRecorderFor(globalserviceip.GlobalIPAllocateControllerName),
 		RESTMapper:      ctx.Mgr.GetRESTMapper(),
 		InformerManager: genericmanager.GetInstance(),
 	}
-	if err := globalIPController.SetupWithManager(ctx.Mgr); err != nil {
+	if err := globalIPAllocateController.SetupWithManager(ctx.Mgr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func startGlobalCIDRCollectController(ctx controllerscontext.Context) (enabled bool, err error) {
+	opts := ctx.Opts
+	globalCIDRCollectController := &globalserviceip.GlobalCIDRCollectController{
+		Client:                      ctx.Mgr.GetClient(),
+		RESTMapper:                  ctx.Mgr.GetRESTMapper(),
+		InformerManager:             genericmanager.GetInstance(),
+		ClusterDynamicClientSetFunc: util.NewClusterDynamicClientSet,
+		ClusterCacheSyncTimeout:     opts.ClusterCacheSyncTimeout,
+	}
+	endpointSliceCollectController.RunWorkQueue()
+	if err := endpointSliceCollectController.SetupWithManager(ctx.Mgr); err != nil {
 		return false, err
 	}
 	return true, nil
