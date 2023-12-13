@@ -111,6 +111,7 @@ var controllersDisabledByDefault = sets.New(
 )
 
 func init() {
+	controllers["globalcidrcollect"] = startGlobalCIDRCollectController
 	controllers["globalipallocate"] = startGlobalIPAllocateController
 	controllers["multiclusterservice"] = startMCSController
 	controllers["endpointsliceCollect"] = startEndpointSliceCollectController
