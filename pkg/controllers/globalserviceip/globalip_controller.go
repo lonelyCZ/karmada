@@ -55,6 +55,7 @@ var (
 	deploymentGVK = appsv1.SchemeGroupVersion.WithKind("Deployment")
 
 	ClusterGlobalCIDRAnnotation = "cluster.karmada.io/global-cidr"
+	GlobalIPForWorkLabel        = "globalip.karmada.io/work-for"
 )
 
 // Reconcile performs a full reconciliation for the object referred to by the Request.
@@ -93,8 +94,8 @@ func (c *GlobalIPController) Reconcile(ctx context.Context, req controllerruntim
 
 	if !work.DeletionTimestamp.IsZero() {
 		// 如果该worker被标记删除了，则清除派生到成员集群中的service和serviceExport
-		if err := c.cleanupServiceAndServiceExportFromCluster(ctx, work); err != nil {
-			klog.Errorf("Failed to cleanup Service and ServiceExport from cluster for work %s/%s:%v", work.Namespace, work.Name, err)
+		if err := c.cleanupGlobalIPFromCluster(ctx, work); err != nil {
+			klog.Errorf("Failed to cleanup GlobalIP from cluster for work %s/%s:%v", work.Namespace, work.Name, err)
 			return controllerruntime.Result{}, nil
 		}
 	}
@@ -106,7 +107,23 @@ func (c *GlobalIPController) Reconcile(ctx context.Context, req controllerruntim
 	return controllerruntime.Result{}, nil
 }
 
-func (c *GlobalIPController) cleanupServiceAndServiceExportFromCluster(ctx context.Context, work *workv1alpha1.Work) error {
+func (c *GlobalIPController) cleanupGlobalIPFromCluster(ctx context.Context, work *workv1alpha1.Work) error {
+	workList := &workv1alpha1.WorkList{}
+	err := c.Client.List(ctx, workList)
+	if err != nil {
+		klog.Errorf("Failed to list works serror: %v", err)
+		return err
+	}
+
+	for _, item := range workList.Items {
+		if util.GetLabelValue(item.Labels, GlobalIPForWorkLabel) != work.Name {
+			continue
+		}
+		if err := c.Client.Delete(ctx, item.DeepCopy()); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -125,9 +142,9 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 		return err
 	}
 
-	// 生成全局Service，并添加名字前缀，作为全局IP的标识
-	name := "globalip-" + deployment.Name
-	globalIPServiceWorkName := "globalips-" + work.Name
+	// 生成全局Service，并添加名字后缀，作为全局IP的标识
+	name := deployment.Name + "globalip"
+	globalIPServiceWorkName := work.Name + "-globalips"
 	globalIPService := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1.SchemeGroupVersion.String(),
@@ -161,6 +178,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 		Finalizers: []string{util.ExecutionControllerFinalizer},
 		Labels: map[string]string{
 			util.ManagedByKarmadaLabel: util.ManagedByKarmadaLabelValue,
+			GlobalIPForWorkLabel:       work.Name,
 		},
 	}
 	unstructuredService := &unstructured.Unstructured{Object: svcObj}
@@ -173,8 +191,8 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 			work.GetNamespace(), work.GetName(), clusterName, err)
 		return err
 	}
-	// 生成全局ServiceExport，并添加名字前缀，作为全局IP的标识
-	globalIPServiceExportWorkName := "globalipse-" + work.Name
+	// 生成全局ServiceExport，并添加名字后缀，作为全局IP的标识
+	globalIPServiceExportWorkName := work.Name + "-globalipse"
 	globalIPServiceExport := &mcsv1alpha1.ServiceExport{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: mcsv1alpha1.SchemeGroupVersion.String(),
@@ -204,6 +222,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 		Finalizers: []string{util.ExecutionControllerFinalizer},
 		Labels: map[string]string{
 			util.ManagedByKarmadaLabel: util.ManagedByKarmadaLabelValue,
+			GlobalIPForWorkLabel:       work.Name,
 		},
 	}
 	unstructuredServiceExport := &unstructured.Unstructured{Object: svcExportObj}
