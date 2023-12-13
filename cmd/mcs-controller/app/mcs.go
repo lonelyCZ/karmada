@@ -295,7 +295,6 @@ func startGlobalCIDRCollectController(ctx controllerscontext.Context) (enabled b
 		ClusterDynamicClientSetFunc: util.NewClusterDynamicClientSet,
 		ClusterCacheSyncTimeout:     opts.ClusterCacheSyncTimeout,
 	}
-	globalCIDRCollectController.RunWorkQueue()
 	if err := globalCIDRCollectController.SetupWithManager(ctx.Mgr); err != nil {
 		return false, err
 	}
