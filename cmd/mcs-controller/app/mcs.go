@@ -42,6 +42,7 @@ import (
 	clusterv1alpha1 "github.com/karmada-io/karmada/pkg/apis/cluster/v1alpha1"
 	workv1alpha1 "github.com/karmada-io/karmada/pkg/apis/work/v1alpha1"
 	controllerscontext "github.com/karmada-io/karmada/pkg/controllers/context"
+	"github.com/karmada-io/karmada/pkg/controllers/globalserviceip"
 	"github.com/karmada-io/karmada/pkg/controllers/multiclusterservice"
 	"github.com/karmada-io/karmada/pkg/metrics"
 	"github.com/karmada-io/karmada/pkg/resourceinterpreter"
@@ -110,6 +111,7 @@ var controllersDisabledByDefault = sets.New(
 )
 
 func init() {
+	controllers["globalip"] = startGlobalIPController
 	controllers["multiclusterservice"] = startMCSController
 	controllers["endpointsliceCollect"] = startEndpointSliceCollectController
 	controllers["endpointsliceDispatch"] = startEndpointSliceDispatchController
@@ -266,6 +268,19 @@ func startEndpointSliceDispatchController(ctx controllerscontext.Context) (enabl
 		InformerManager: genericmanager.GetInstance(),
 	}
 	if err := endpointSliceSyncController.SetupWithManager(ctx.Mgr); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func startGlobalIPController(ctx controllerscontext.Context) (enable bool, err error) {
+	globalIPController := &globalserviceip.GlobalIPController{
+		Client:          ctx.Mgr.GetClient(),
+		EventRecorder:   ctx.Mgr.GetEventRecorderFor(globalserviceip.GlobalIPControllerName),
+		RESTMapper:      ctx.Mgr.GetRESTMapper(),
+		InformerManager: genericmanager.GetInstance(),
+	}
+	if err := globalIPController.SetupWithManager(ctx.Mgr); err != nil {
 		return false, err
 	}
 	return true, nil

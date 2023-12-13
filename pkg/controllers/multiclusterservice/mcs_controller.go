@@ -91,14 +91,16 @@ func (c *MCSController) Reconcile(ctx context.Context, req controllerruntime.Req
 	var err error
 	defer func() {
 		if err != nil {
+			// 如果出现错误，则设置状态为Failed
 			_ = c.updateMCSStatus(mcs, metav1.ConditionFalse, "ServiceAppliedFailed", err.Error())
 			c.EventRecorder.Eventf(mcs, corev1.EventTypeWarning, events.EventReasonSyncServiceWorkFailed, err.Error())
 			return
 		}
+		// 如果成功则，则设置状态为Succeed
 		_ = c.updateMCSStatus(mcs, metav1.ConditionTrue, "ServiceAppliedSucceed", "Service is propagated to target clusters.")
 		c.EventRecorder.Eventf(mcs, corev1.EventTypeNormal, events.EventReasonSyncWorkSucceed, "Service is propagated to target clusters.")
 	}()
-
+	// 处理MCS的创建和更新
 	if err = c.handleMCSCreateOrUpdate(ctx, mcs.DeepCopy()); err != nil {
 		return controllerruntime.Result{}, err
 	}
@@ -134,7 +136,9 @@ func (c *MCSController) handleMCSDelete(ctx context.Context, mcs *networkingv1al
 	return controllerruntime.Result{}, nil
 }
 
+// 根据mcsID，删除对应的service work
 func (c *MCSController) deleteServiceWork(mcs *networkingv1alpha1.MultiClusterService, retainClusters sets.Set[string]) error {
+
 	mcsID := util.GetLabelValue(mcs.Labels, networkingv1alpha1.MultiClusterServicePermanentIDLabel)
 	workList, err := helper.GetWorksByLabelsSet(c, labels.Set{
 		networkingv1alpha1.MultiClusterServicePermanentIDLabel: mcsID,
@@ -145,6 +149,7 @@ func (c *MCSController) deleteServiceWork(mcs *networkingv1alpha1.MultiClusterSe
 	}
 
 	for _, work := range workList.Items {
+		// 逐一删除service work
 		if !helper.IsWorkContains(work.Spec.Workload.Manifests, serviceGVK) {
 			continue
 		}
@@ -168,6 +173,7 @@ func (c *MCSController) deleteServiceWork(mcs *networkingv1alpha1.MultiClusterSe
 	return nil
 }
 
+// 删除创建的mcs类型的work
 func (c *MCSController) deleteMultiClusterServiceWork(mcs *networkingv1alpha1.MultiClusterService, deleteAll bool) error {
 	mcsID := util.GetLabelValue(mcs.Labels, networkingv1alpha1.MultiClusterServicePermanentIDLabel)
 	workList, err := helper.GetWorksByLabelsSet(c, labels.Set{
@@ -177,7 +183,7 @@ func (c *MCSController) deleteMultiClusterServiceWork(mcs *networkingv1alpha1.Mu
 		klog.Errorf("Failed to list work by MultiClusterService(%s/%s):%v", mcs.Namespace, mcs.Name, err)
 		return err
 	}
-
+	// 获取提供服务的集群
 	provisionClusters, err := helper.GetProvisionClusters(c.Client, mcs)
 	if err != nil {
 		klog.Errorf("Failed to get provision clusters by MultiClusterService(%s/%s):%v", mcs.Namespace, mcs.Name, err)
@@ -195,9 +201,10 @@ func (c *MCSController) deleteMultiClusterServiceWork(mcs *networkingv1alpha1.Mu
 		}
 
 		if !deleteAll && provisionClusters.Has(clusterName) && c.IsClusterReady(clusterName) {
+			// 不是删除所有，提供集群中有这个work的cluster，且cluster是ready状态，则不删除
 			continue
 		}
-
+		// 清除掉endpointslice work
 		if err := c.cleanProvisionEndpointSliceWork(work.DeepCopy()); err != nil {
 			klog.Errorf("Failed to clean provision EndpointSlice work(%s/%s):%v", work.Namespace, work.Name, err)
 			return err
@@ -213,6 +220,7 @@ func (c *MCSController) deleteMultiClusterServiceWork(mcs *networkingv1alpha1.Mu
 	return nil
 }
 
+// 清理生产集群里的endpointslice
 func (c *MCSController) cleanProvisionEndpointSliceWork(work *workv1alpha1.Work) error {
 	workList := &workv1alpha1.WorkList{}
 	if err := c.List(context.TODO(), workList, &client.ListOptions{
@@ -262,6 +270,7 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 		"namespace", mcs.Namespace, "name", mcs.Name)
 
 	// 1. if mcs not contain CrossCluster type, delete service work if needed
+	// 如果mcs不是跨集群类型，则删除service work和mcs work
 	if !helper.MultiClusterServiceCrossClusterEnabled(mcs) {
 		if err := c.deleteServiceWork(mcs, sets.New[string]()); err != nil {
 			return err
@@ -272,6 +281,7 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 	}
 
 	// 2. add finalizer if needed
+	// 添加finalizer
 	finalizersUpdated := controllerutil.AddFinalizer(mcs, util.MCSControllerFinalizer)
 	if finalizersUpdated {
 		err := c.Client.Update(ctx, mcs)
@@ -282,11 +292,13 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 	}
 
 	// 3. Generate the MCS work
+	// 生成mcs work
 	if err := c.ensureMultiClusterServiceWork(ctx, mcs); err != nil {
 		return err
 	}
 
 	// 4. make sure service exist
+	// 确保service存在于控制面
 	svc := &corev1.Service{}
 	err := c.Client.Get(ctx, types.NamespacedName{Namespace: mcs.Namespace, Name: mcs.Name}, svc)
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -295,6 +307,7 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 	}
 
 	// 5. if service not exist, delete service work if needed
+	// 如果service不存在了，要删除掉对应的service work
 	if apierrors.IsNotFound(err) {
 		delErr := c.deleteServiceWork(mcs, sets.New[string]())
 		if delErr != nil {
@@ -306,17 +319,20 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 	}
 
 	// 6. if service exist, create or update corresponding work in clusters
+	// 如果service存在，需要将service传播到成员集群中
 	syncClusters, err := c.syncSVCWorkToClusters(ctx, mcs, svc)
 	if err != nil {
 		return err
 	}
 
 	// 7. delete MultiClusterService work not in provision clusters and in the unready clusters
+	// 删除掉不在生产集群中和cluster未就绪集群中的mcs work
 	if err = c.deleteMultiClusterServiceWork(mcs, false); err != nil {
 		return err
 	}
 
 	// 8. delete service work not in need sync clusters
+	// 删除掉不再需要同步集群中的service
 	if err = c.deleteServiceWork(mcs, syncClusters); err != nil {
 		return err
 	}
@@ -325,7 +341,9 @@ func (c *MCSController) handleMCSCreateOrUpdate(ctx context.Context, mcs *networ
 	return nil
 }
 
+// mcs work只是提供给控制面识别，不下发到子集群中
 func (c *MCSController) ensureMultiClusterServiceWork(ctx context.Context, mcs *networkingv1alpha1.MultiClusterService) error {
+	// 获取到提供集群，
 	provisionClusters, err := helper.GetProvisionClusters(c.Client, mcs)
 	if err != nil {
 		klog.Errorf("Failed to get provision clusters by MultiClusterService(%s/%s):%v", mcs.Namespace, mcs.Name, err)
@@ -364,6 +382,7 @@ func (c *MCSController) ensureMultiClusterServiceWork(ctx context.Context, mcs *
 	return nil
 }
 
+// 将svc同步到成员集群中，根据生产和消费集群的情况
 func (c *MCSController) syncSVCWorkToClusters(
 	ctx context.Context,
 	mcs *networkingv1alpha1.MultiClusterService,
@@ -380,6 +399,7 @@ func (c *MCSController) syncSVCWorkToClusters(
 	clientLocations := sets.New[string](mcs.Spec.ServiceConsumptionClusters...)
 	for clusterName := range clusters {
 		// if ServerLocations or ClientLocations are empty, we will sync work to the all clusters
+		// 如果没有设置生产或消费cluster，就需要传播到所有的成员集群中
 		if len(serverLocations) == 0 || len(clientLocations) == 0 ||
 			serverLocations.Has(clusterName) || clientLocations.Has(clusterName) {
 			syncClusters.Insert(clusterName)
@@ -406,9 +426,10 @@ func (c *MCSController) syncSVCWorkToClusters(
 		}
 
 		// Add these two label as for work status synchronization
+		// 需要同步woker的状态
 		util.MergeLabel(Unstructured, workv1alpha1.WorkNameLabel, names.GenerateMCSWorkName(svc.Kind, svc.Name, svc.Namespace, clusterName))
 		util.MergeLabel(Unstructured, workv1alpha1.WorkNamespaceLabel, names.GenerateExecutionSpaceName(clusterName))
-
+		// 直接在此处创建work，不需要通过pp了
 		if err = helper.CreateOrUpdateWork(c, workMeta, Unstructured); err != nil {
 			klog.Errorf("Failed to create or update resource(%v/%v) in the given member cluster %s, err is %v",
 				workMeta.GetNamespace(), workMeta.GetName(), clusterName, err)

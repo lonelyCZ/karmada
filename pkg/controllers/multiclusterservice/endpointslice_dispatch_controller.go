@@ -67,7 +67,7 @@ type EndpointsliceDispatchController struct {
 // Reconcile performs a full reconciliation for the object referred to by the Request.
 func (c *EndpointsliceDispatchController) Reconcile(ctx context.Context, req controllerruntime.Request) (controllerruntime.Result, error) {
 	klog.V(4).Infof("Reconciling Work %s", req.NamespacedName.String())
-
+	// 此处监听的work是收集成员集群eps的work
 	work := &workv1alpha1.Work{}
 	if err := c.Client.Get(ctx, req.NamespacedName, work); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -75,19 +75,20 @@ func (c *EndpointsliceDispatchController) Reconcile(ctx context.Context, req con
 		}
 		return controllerruntime.Result{Requeue: true}, err
 	}
-
+	// 如果work不包含eps，就不管
 	if !helper.IsWorkContains(work.Spec.Workload.Manifests, endpointSliceGVK) {
 		return controllerruntime.Result{}, nil
 	}
 
 	if !work.DeletionTimestamp.IsZero() {
+		// 如果该worker被标记删除了，则清除消费集群中的eps
 		if err := c.cleanupEndpointSliceFromConsumerClusters(ctx, work); err != nil {
 			klog.Errorf("Failed to cleanup EndpointSlice from consumer clusters for work %s/%s:%v", work.Namespace, work.Name, err)
 			return controllerruntime.Result{Requeue: true}, err
 		}
 		return controllerruntime.Result{}, nil
 	}
-
+	// 获取对应work的mcs资源
 	mcsName := util.GetLabelValue(work.Labels, util.MultiClusterServiceNameLabel)
 	mcsNS := util.GetLabelValue(work.Labels, util.MultiClusterServiceNamespaceLabel)
 	mcs := &networkingv1alpha1.MultiClusterService{}
@@ -102,18 +103,20 @@ func (c *EndpointsliceDispatchController) Reconcile(ctx context.Context, req con
 	var err error
 	defer func() {
 		if err != nil {
+			// 失败事件
 			_ = c.updateEndpointSliceDispatched(mcs, metav1.ConditionFalse, "EndpointSliceDispatchedFailed", err.Error())
 			c.EventRecorder.Eventf(mcs, corev1.EventTypeWarning, events.EventReasonDispatchEndpointSliceFailed, err.Error())
 			return
 		}
+		// 成功事件
 		_ = c.updateEndpointSliceDispatched(mcs, metav1.ConditionTrue, "EndpointSliceDispatchedSucceed", "EndpointSlice are dispatched successfully")
 		c.EventRecorder.Eventf(mcs, corev1.EventTypeNormal, events.EventReasonDispatchEndpointSliceSucceed, "EndpointSlice are dispatched successfully")
 	}()
-
+	// 清除孤儿eps
 	if err = c.cleanOrphanDispatchedEndpointSlice(ctx, mcs); err != nil {
 		return controllerruntime.Result{Requeue: true}, err
 	}
-
+	// 向成员集群分发eps
 	if err = c.dispatchEndpointSlice(ctx, work.DeepCopy(), mcs); err != nil {
 		return controllerruntime.Result{Requeue: true}, err
 	}
@@ -149,6 +152,7 @@ func (c *EndpointsliceDispatchController) updateEndpointSliceDispatched(mcs *net
 // SetupWithManager creates a controller and register to controller manager.
 func (c *EndpointsliceDispatchController) SetupWithManager(mgr controllerruntime.Manager) error {
 	workPredicateFun := predicate.Funcs{
+		// 只关心来自生产集群的eps
 		CreateFunc: func(createEvent event.CreateEvent) bool {
 			// We only care about the EndpointSlice work from provision clusters
 			return util.GetLabelValue(createEvent.Object.GetLabels(), util.MultiClusterServiceNameLabel) != "" &&
@@ -168,6 +172,7 @@ func (c *EndpointsliceDispatchController) SetupWithManager(mgr controllerruntime
 			return false
 		},
 	}
+	// 将监听work，mcs和cluster
 	return controllerruntime.NewControllerManagedBy(mgr).For(&workv1alpha1.Work{}, builder.WithPredicates(workPredicateFun)).
 		Watches(&networkingv1alpha1.MultiClusterService{}, handler.EnqueueRequestsFromMapFunc(c.newMultiClusterServiceFunc())).
 		Watches(&clusterv1alpha1.Cluster{}, handler.EnqueueRequestsFromMapFunc(c.newClusterFunc())).
@@ -267,6 +272,7 @@ func (c *EndpointsliceDispatchController) newMultiClusterServiceFunc() handler.M
 	}
 }
 
+// 清除掉未再被mcs引用的分发eps
 func (c *EndpointsliceDispatchController) cleanOrphanDispatchedEndpointSlice(ctx context.Context, mcs *networkingv1alpha1.MultiClusterService) error {
 	workList := &workv1alpha1.WorkList{}
 	if err := c.Client.List(ctx, workList, &client.ListOptions{
@@ -280,6 +286,7 @@ func (c *EndpointsliceDispatchController) cleanOrphanDispatchedEndpointSlice(ctx
 
 	for _, work := range workList.Items {
 		// We only care about the EndpointSlice work in consumption clusters
+		// 只关心消费集群中的eps
 		if util.GetAnnotationValue(work.Annotations, util.EndpointSliceProvisionClusterAnnotation) == "" {
 			continue
 		}
@@ -295,11 +302,11 @@ func (c *EndpointsliceDispatchController) cleanOrphanDispatchedEndpointSlice(ctx
 			klog.Errorf("Failed to get cluster name for work %s/%s", work.Namespace, work.Name)
 			return err
 		}
-
+		// 如果该集群还存在于消费集群中，则不需要删除
 		if consumptionClusters.Has(cluster) {
 			continue
 		}
-
+		// 如果该集群没有在mcs再在mcs消费集群中，则删除eps
 		if err := c.Client.Delete(ctx, work.DeepCopy()); err != nil {
 			klog.Errorf("Failed to delete work %s/%s, error is: %v", work.Namespace, work.Name, err)
 			return err
@@ -310,12 +317,13 @@ func (c *EndpointsliceDispatchController) cleanOrphanDispatchedEndpointSlice(ctx
 }
 
 func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Context, work *workv1alpha1.Work, mcs *networkingv1alpha1.MultiClusterService) error {
+	// 获取到eps源集群信息
 	epsSourceCluster, err := names.GetClusterName(work.Namespace)
 	if err != nil {
 		klog.Errorf("Failed to get EndpointSlice source cluster name for work %s/%s", work.Namespace, work.Name)
 		return err
 	}
-
+	// 获取设置的消费集群
 	consumptionClusters := sets.New[string](mcs.Spec.ServiceConsumptionClusters...)
 	if len(consumptionClusters) == 0 {
 		consumptionClusters, err = util.GetClusterSet(c.Client)
@@ -325,6 +333,7 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 		}
 	}
 	for clusterName := range consumptionClusters {
+		// 源集群中不必再下发
 		if clusterName == epsSourceCluster {
 			continue
 		}
@@ -335,13 +344,14 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 		}
 
 		// There should be only one manifest in the work, let's use the first one.
+		// 一般只有一个manifest
 		manifest := work.Spec.Workload.Manifests[0]
 		unstructuredObj := &unstructured.Unstructured{}
 		if err := unstructuredObj.UnmarshalJSON(manifest.Raw); err != nil {
 			klog.Errorf("Failed to unmarshal work manifest, error is: %v", err)
 			return err
 		}
-
+		// 转化为endpointslice
 		endpointSlice := &discoveryv1.EndpointSlice{}
 		if err := helper.ConvertToTypedObject(unstructuredObj, endpointSlice); err != nil {
 			klog.Errorf("Failed to convert unstructured object to typed object, error is: %v", err)
@@ -349,6 +359,7 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 		}
 
 		// Use this name to avoid naming conflicts and locate the EPS source cluster.
+		// 添加名字前缀，避免发生冲突
 		endpointSlice.Name = epsSourceCluster + "-" + endpointSlice.Name
 		clusterNamespace := names.GenerateExecutionSpaceName(clusterName)
 		endpointSlice.Labels = map[string]string{
@@ -360,9 +371,10 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 		}
 		endpointSlice.Annotations = map[string]string{
 			// This annotation is used to identify the source cluster of EndpointSlice and whether the eps are the newest version
+			// 用来表示eps的源集群，并且该eps是否是最新版本的
 			util.EndpointSliceProvisionClusterAnnotation: epsSourceCluster,
 		}
-
+		// 创建外层的work
 		workMeta := metav1.ObjectMeta{
 			Name:       work.Name,
 			Namespace:  clusterNamespace,
@@ -387,7 +399,7 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 			return err
 		}
 	}
-
+	// 给work添加finalizer
 	if controllerutil.AddFinalizer(work, util.MCSEndpointSliceDispatchControllerFinalizer) {
 		if err := c.Client.Update(ctx, work); err != nil {
 			klog.Errorf("Failed to add finalizer %s for work %s/%s:%v", util.MCSEndpointSliceDispatchControllerFinalizer, work.Namespace, work.Name, err)
@@ -398,6 +410,7 @@ func (c *EndpointsliceDispatchController) dispatchEndpointSlice(ctx context.Cont
 	return nil
 }
 
+// 清除成员集群中的endpointslice
 func (c *EndpointsliceDispatchController) cleanupEndpointSliceFromConsumerClusters(ctx context.Context, work *workv1alpha1.Work) error {
 	// TBD: There may be a better way without listing all works.
 	workList := &workv1alpha1.WorkList{}
@@ -413,6 +426,7 @@ func (c *EndpointsliceDispatchController) cleanupEndpointSliceFromConsumerCluste
 		return err
 	}
 	for _, item := range workList.Items {
+		// 不是eps源集群，不处理
 		if item.Name != work.Name || util.GetAnnotationValue(item.Annotations, util.EndpointSliceProvisionClusterAnnotation) != epsSourceCluster {
 			continue
 		}
