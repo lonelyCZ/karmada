@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	controllerruntime "sigs.k8s.io/controller-runtime"
@@ -146,6 +147,10 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 	for k, v := range deployment.Spec.Selector.MatchLabels {
 		globalIPService.Labels[k] = v
 	}
+	svcObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(globalIPService)
+	if err != nil {
+		return err
+	}
 	workMeta := metav1.ObjectMeta{
 		Name:       globalIPServiceWorkName,
 		Namespace:  work.Namespace,
@@ -154,7 +159,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 			util.ManagedByKarmadaLabel: util.ManagedByKarmadaLabelValue,
 		},
 	}
-	unstructuredService, err := helper.ToUnstructured(globalIPService)
+	unstructuredService := &unstructured.Unstructured{Object: svcObj}
 	if err != nil {
 		klog.Errorf("Failed to convert typed object to unstructured object, error is: %v", err)
 		return err
@@ -181,6 +186,10 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 	for k, v := range deployment.Spec.Selector.MatchLabels {
 		globalIPServiceExport.Labels[k] = v
 	}
+	svcExportObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(globalIPServiceExport)
+	if err != nil {
+		return err
+	}
 	workMeta = metav1.ObjectMeta{
 		Name:       globalIPServiceExportWorkName,
 		Namespace:  work.Namespace,
@@ -189,13 +198,13 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 			util.ManagedByKarmadaLabel: util.ManagedByKarmadaLabelValue,
 		},
 	}
-	unstructuredServiceExport, err := helper.ToUnstructured(globalIPServiceExport)
+	unstructuredServiceExport := &unstructured.Unstructured{Object: svcExportObj}
 	if err != nil {
 		klog.Errorf("Failed to convert typed object to unstructured object, error is: %v", err)
 		return err
 	}
 	if err := helper.CreateOrUpdateWork(c.Client, workMeta, unstructuredServiceExport); err != nil {
-		klog.Errorf("Failed to allocate GlobalIPService %s/%s to member cluster %s:%v",
+		klog.Errorf("Failed to allocate GlobalIPServiceExport %s/%s to member cluster %s:%v",
 			work.GetNamespace(), work.GetName(), clusterName, err)
 		return err
 	}
