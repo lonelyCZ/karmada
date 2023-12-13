@@ -135,7 +135,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: work.Namespace,
+			Namespace: deployment.Namespace,
 		},
 		Spec: corev1.ServiceSpec{
 			ClusterIP: corev1.ClusterIPNone,
@@ -182,7 +182,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: work.Namespace,
+			Namespace: deployment.Namespace,
 		},
 	}
 	globalIPServiceExport.Labels = map[string]string{
