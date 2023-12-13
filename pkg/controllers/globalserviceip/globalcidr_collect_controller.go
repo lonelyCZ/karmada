@@ -170,7 +170,7 @@ func (c *GlobalCIDRCollectController) collectGlobalCidr(ctx context.Context, clu
 		return nil
 	}
 
-	if len(cluster.Annotations) == 0 {
+	if cluster.Annotations == nil {
 		cluster.Annotations = map[string]string{}
 	}
 	cluster.Annotations[ClusterGlobalCIDRAnnotation] = subCluster.Spec.GlobalCIDR[0]
