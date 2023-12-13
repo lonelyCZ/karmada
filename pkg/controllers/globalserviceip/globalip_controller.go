@@ -127,7 +127,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 	// 生成全局Service，并添加名字前缀，作为全局IP的标识
 	name := "globalip-" + deployment.Name
 	globalIPServiceWorkName := "globalips-" + work.Name
-	globalIPService := corev1.Service{
+	globalIPService := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: work.Namespace,
@@ -166,7 +166,7 @@ func (c *GlobalIPController) allocateGlobalIP(ctx context.Context, work *workv1a
 	}
 	// 生成全局ServiceExport，并添加名字前缀，作为全局IP的标识
 	globalIPServiceExportWorkName := "globalipse-" + work.Name
-	globalIPServiceExport := mcsv1alpha1.ServiceExport{
+	globalIPServiceExport := &mcsv1alpha1.ServiceExport{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: work.Namespace,
