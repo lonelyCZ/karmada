@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: globalip-manager
+  namespace: karmada-system
+  labels:
+    app: globalip-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: globalip-manager
+  template:
+    metadata:
+      labels:
+        app: globalip-manager
+    spec:
+      automountServiceAccountToken: false
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+      containers:
+        - name: globalip-manager
+          image: karmada/globalip-manager:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/globalip-manager
+            - --kubeconfig=/etc/kubeconfig
+            - --bind-address=0.0.0.0
+            - --secure-port=10357
+            - --leader-elect-resource-namespace=karmada-system
+            - --v=4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10357
+              scheme: HTTP
+            failureThreshold: 3
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          volumeMounts:
+          - name: kubeconfig
+            subPath: kubeconfig
+            mountPath: /etc/kubeconfig
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: kubeconfig

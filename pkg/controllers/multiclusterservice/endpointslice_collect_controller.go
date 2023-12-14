@@ -85,7 +85,7 @@ func (c *EndpointSliceCollectController) Reconcile(ctx context.Context, req cont
 		}
 		return controllerruntime.Result{Requeue: true}, err
 	}
-
+	// 主要是监听mcs类型的work
 	if !helper.IsWorkContains(work.Spec.Workload.Manifests, multiClusterServiceGVK) {
 		return controllerruntime.Result{}, nil
 	}
@@ -100,11 +100,11 @@ func (c *EndpointSliceCollectController) Reconcile(ctx context.Context, req cont
 		klog.Errorf("Failed to get cluster name for work %s/%s", work.Namespace, work.Name)
 		return controllerruntime.Result{Requeue: true}, err
 	}
-
+	// 构建自己群informer
 	if err = c.buildResourceInformers(ctx, work, clusterName); err != nil {
 		return controllerruntime.Result{Requeue: true}, err
 	}
-
+	// 收集目标endpointslice
 	if err = c.collectTargetEndpointSlice(work, clusterName); err != nil {
 		return controllerruntime.Result{Requeue: true}, err
 	}
@@ -119,6 +119,7 @@ func (c *EndpointSliceCollectController) SetupWithManager(mgr controllerruntime.
 }
 
 // RunWorkQueue initializes worker and run it, worker will process resource asynchronously.
+// 异步收集endpointslices
 func (c *EndpointSliceCollectController) RunWorkQueue() {
 	workerOptions := util.Options{
 		Name:          "endpointslice-collect",
@@ -129,6 +130,7 @@ func (c *EndpointSliceCollectController) RunWorkQueue() {
 	c.worker.Run(c.WorkerNumber, c.StopChan)
 }
 
+// 这里的收集不要是监听成员集群endpointslices资源的变化，动态更新报告的eps work资源
 func (c *EndpointSliceCollectController) collectEndpointSlice(key util.QueueKey) error {
 	fedKey, ok := key.(keys.FederatedKey)
 	if !ok {
@@ -137,6 +139,7 @@ func (c *EndpointSliceCollectController) collectEndpointSlice(key util.QueueKey)
 	}
 
 	klog.V(4).Infof("Begin to collect %s %s.", fedKey.Kind, fedKey.NamespaceKey())
+	// 处理收集和删除事件
 	if err := c.handleEndpointSliceEvent(fedKey); err != nil {
 		klog.Errorf("Failed to handle endpointSlice(%s) event, Error: %v",
 			fedKey.NamespaceKey(), err)
@@ -146,6 +149,7 @@ func (c *EndpointSliceCollectController) collectEndpointSlice(key util.QueueKey)
 	return nil
 }
 
+// 构建资源informer
 func (c *EndpointSliceCollectController) buildResourceInformers(ctx context.Context, work *workv1alpha1.Work, clusterName string) error {
 	cluster, err := util.GetCluster(c.Client, clusterName)
 	if err != nil {
@@ -168,9 +172,11 @@ func (c *EndpointSliceCollectController) buildResourceInformers(ctx context.Cont
 
 // registerInformersAndStart builds informer manager for cluster if it doesn't exist, then constructs informers for gvr
 // and start it.
+// 构建对成员集群的informer，用于监听资源
 func (c *EndpointSliceCollectController) registerInformersAndStart(cluster *clusterv1alpha1.Cluster) error {
 	singleClusterInformerManager := c.InformerManager.GetSingleClusterManager(cluster.Name)
 	if singleClusterInformerManager == nil {
+		// 如果为空就创建informer
 		dynamicClusterClient, err := c.ClusterDynamicClientSetFunc(cluster.Name, c.Client)
 		if err != nil {
 			klog.Errorf("Failed to build dynamic cluster client for cluster %s.", cluster.Name)
@@ -187,16 +193,19 @@ func (c *EndpointSliceCollectController) registerInformersAndStart(cluster *clus
 	for _, gvr := range gvrTargets {
 		if !singleClusterInformerManager.IsInformerSynced(gvr) || !singleClusterInformerManager.IsHandlerExist(gvr, c.getEventHandler(cluster.Name)) {
 			allSynced = false
+			// 如果informer中没有监听endpointSlice，则添加
 			singleClusterInformerManager.ForResource(gvr, c.getEventHandler(cluster.Name))
 		}
 	}
 	if allSynced {
+		// 都监听了，不需要再操作了
 		return nil
 	}
-
+	// 启动单集群informer
 	c.InformerManager.Start(cluster.Name)
 
 	if err := func() error {
+		// 等待informer
 		synced := c.InformerManager.WaitForCacheSyncWithTimeout(cluster.Name, c.ClusterCacheSyncTimeout.Duration)
 		if synced == nil {
 			return fmt.Errorf("no informerFactory for cluster %s exist", cluster.Name)
@@ -276,15 +285,17 @@ func (c *EndpointSliceCollectController) genHandlerDeleteFunc(clusterName string
 // handleEndpointSliceEvent syncs EndPointSlice objects to control-plane according to EndpointSlice event.
 // For EndpointSlice create or update event, reports the EndpointSlice when referencing service has been exported.
 // For EndpointSlice delete event, cleanup the previously reported EndpointSlice.
+// 更具endpointslice创建或删除event来操作
 func (c *EndpointSliceCollectController) handleEndpointSliceEvent(endpointSliceKey keys.FederatedKey) error {
 	endpointSliceObj, err := helper.GetObjectFromCache(c.RESTMapper, c.InformerManager, endpointSliceKey)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			// 如果没找到endpointslice资源，则删除work
 			return cleanupWorkWithEndpointSliceDelete(c.Client, endpointSliceKey)
 		}
 		return err
 	}
-
+	// 对于分发的eps，不处理
 	if util.GetLabelValue(endpointSliceObj.GetLabels(), discoveryv1.LabelManagedBy) == util.EndpointSliceDispatchControllerLabelValue {
 		return nil
 	}
@@ -307,10 +318,11 @@ func (c *EndpointSliceCollectController) handleEndpointSliceEvent(endpointSliceK
 			break
 		}
 	}
+	// 如果mcs不存在，不需要处理
 	if !mcsExists {
 		return nil
 	}
-
+	// 向控制面报告endpointslices
 	if err = c.reportEndpointSliceWithEndpointSliceCreateOrUpdate(endpointSliceKey.Cluster, endpointSliceObj); err != nil {
 		klog.Errorf("Failed to handle endpointSlice(%s) event, Error: %v",
 			endpointSliceKey.NamespaceKey(), err)
@@ -320,6 +332,7 @@ func (c *EndpointSliceCollectController) handleEndpointSliceEvent(endpointSliceK
 	return nil
 }
 
+// 收集目标endpointslice
 func (c *EndpointSliceCollectController) collectTargetEndpointSlice(work *workv1alpha1.Work, clusterName string) error {
 	manager := c.InformerManager.GetSingleClusterManager(clusterName)
 	if manager == nil {
@@ -330,9 +343,11 @@ func (c *EndpointSliceCollectController) collectTargetEndpointSlice(work *workv1
 
 	svcNamespace := util.GetLabelValue(work.Labels, util.MultiClusterServiceNamespaceLabel)
 	svcName := util.GetLabelValue(work.Labels, util.MultiClusterServiceNameLabel)
+	// 根据label选择svc
 	selector := labels.SelectorFromSet(labels.Set{
 		discoveryv1.LabelServiceName: svcName,
 	})
+	// 获取命名空间下的所有endpointslice
 	epsList, err := manager.Lister(discoveryv1.SchemeGroupVersion.WithResource("endpointslices")).ByNamespace(svcNamespace).List(selector)
 	if err != nil {
 		klog.Errorf("Failed to list EndpointSlice for Service(%s/%s) in cluster(%s), Error: %v", svcNamespace, svcName, clusterName, err)
@@ -340,10 +355,12 @@ func (c *EndpointSliceCollectController) collectTargetEndpointSlice(work *workv1
 	}
 	for _, epsObj := range epsList {
 		eps := &discoveryv1.EndpointSlice{}
+		// 转换为endpointslices
 		if err = helper.ConvertToTypedObject(epsObj, eps); err != nil {
 			klog.Errorf("Failed to convert object to EndpointSlice, error: %v", err)
 			return err
 		}
+		// 对于分发的endpointslice，将不收集
 		if util.GetLabelValue(eps.GetLabels(), discoveryv1.LabelManagedBy) == util.EndpointSliceDispatchControllerLabelValue {
 			continue
 		}
@@ -352,6 +369,7 @@ func (c *EndpointSliceCollectController) collectTargetEndpointSlice(work *workv1
 			klog.Errorf("Failed to convert EndpointSlice %s/%s to unstructured, error: %v", eps.GetNamespace(), eps.GetName(), err)
 			return err
 		}
+		// 报告endpointslice，并创建或更新endpointslice
 		if err := c.reportEndpointSliceWithEndpointSliceCreateOrUpdate(clusterName, epsUnstructured); err != nil {
 			return err
 		}
@@ -362,6 +380,7 @@ func (c *EndpointSliceCollectController) collectTargetEndpointSlice(work *workv1
 
 // reportEndpointSliceWithEndpointSliceCreateOrUpdate reports the EndpointSlice when referencing service has been exported.
 func (c *EndpointSliceCollectController) reportEndpointSliceWithEndpointSliceCreateOrUpdate(clusterName string, endpointSlice *unstructured.Unstructured) error {
+	// 向控制面报告endpointslices
 	if err := reportEndpointSlice(c.Client, endpointSlice, clusterName); err != nil {
 		return fmt.Errorf("failed to report EndpointSlice(%s/%s) from cluster(%s) to control-plane",
 			endpointSlice.GetNamespace(), endpointSlice.GetName(), clusterName)
@@ -386,7 +405,7 @@ func reportEndpointSlice(c client.Client, endpointSlice *unstructured.Unstructur
 			util.ManagedByKarmadaLabel:  util.ManagedByKarmadaLabelValue,
 		},
 	}
-
+	// 直接创建endpointslice work
 	if err := helper.CreateOrUpdateWork(c, workMeta, endpointSlice); err != nil {
 		klog.Errorf("Failed to create or update work(%s/%s), Error: %v", workMeta.Namespace, workMeta.Name, err)
 		return err
@@ -395,6 +414,7 @@ func reportEndpointSlice(c client.Client, endpointSlice *unstructured.Unstructur
 	return nil
 }
 
+// 清理掉收集endpointslices的worker
 func cleanupWorkWithEndpointSliceDelete(c client.Client, endpointSliceKey keys.FederatedKey) error {
 	executionSpace := names.GenerateExecutionSpaceName(endpointSliceKey.Cluster)
 

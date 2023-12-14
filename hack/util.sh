@@ -55,6 +55,8 @@ KARMADA_TARGET_SOURCE=(
   karmada-search=cmd/karmada-search
   karmada-operator=operator/cmd/operator
   karmada-metrics-adapter=cmd/metrics-adapter
+  globalip-manager=cmd/globalip-manager
+  mcs-manager=cmd/mcs-manager
 )
 
 #https://textkool.com/en/ascii-art-generator?hl=default&vl=default&font=DOS%20Rebel&text=KARMADA

@@ -462,6 +462,9 @@ github.com/stretchr/objx
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/mock
 github.com/stretchr/testify/require
+# github.com/submariner-io/submariner/pkg/apis v0.0.0-20211213172258-306292ad8988
+## explicit; go 1.15
+github.com/submariner-io/submariner/pkg/apis/submariner.io/v1
 # github.com/subosito/gotenv v1.4.2
 ## explicit; go 1.18
 github.com/subosito/gotenv
