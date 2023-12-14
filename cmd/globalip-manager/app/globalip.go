@@ -241,6 +241,7 @@ func startGlobalCIDRCollectController(ctx controllerscontext.Context) (enabled b
 	globalCIDRCollectController := &globalserviceip.GlobalCIDRCollectController{
 		Client:                      ctx.Mgr.GetClient(),
 		RESTMapper:                  ctx.Mgr.GetRESTMapper(),
+		EventRecorder:               ctx.Mgr.GetEventRecorderFor(globalserviceip.GlobalCIDRCollectControllerName),
 		InformerManager:             genericmanager.GetInstance(),
 		ClusterDynamicClientSetFunc: util.NewClusterDynamicClientSet,
 		ClusterCacheSyncTimeout:     opts.ClusterCacheSyncTimeout,
